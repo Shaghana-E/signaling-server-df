@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Interview - Candidate View</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f172a; color: #f1f5f9;
+      font-family: -apple-system, sans-serif;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      min-height: 100vh; padding: 20px;
+    }
+    .card {
+      background: #1e293b; border-radius: 16px;
+      padding: 32px; width: 100%; max-width: 500px;
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    p { color: #94a3b8; margin-bottom: 24px; font-size: 14px; }
+    input {
+      width: 100%; padding: 14px; border-radius: 10px;
+      border: 1px solid #334155; background: #0f172a;
+      color: #f1f5f9; font-size: 20px; text-align: center;
+      letter-spacing: 4px; margin-bottom: 12px;
+    }
+    button {
+      width: 100%; padding: 14px; border-radius: 10px;
+      border: none; background: #6366f1; color: white;
+      font-size: 16px; font-weight: bold; cursor: pointer;
+    }
+    button:disabled { background: #334155; cursor: not-allowed; }
+    video {
+      width: 100%; border-radius: 12px; background: #000;
+      margin-top: 20px; 
+    }
+    #status {
+      margin-top: 16px; padding: 12px; border-radius: 8px;
+      text-align: center; font-size: 14px; display: none;
+    }
+    .status-waiting { background: #1e3a5f; color: #60a5fa; }
+    .status-connected { background: #064e3b; color: #34d399; }
+    .status-error { background: #7f1d1d; color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎥 Interview Session</h1>
+    <p>Enter the Room ID your interviewer provided, then click Join.</p>
+
+    <input
+      id="roomInput"
+      type="text"
+      placeholder="ROOM ID"
+      maxlength="10"
+      oninput="this.value = this.value.toUpperCase()"
+    />
+    <p style="color:#94a3b8; font-size:13px; margin-top:16px; margin-bottom:6px;">
+  Select Camera Source:
+</p>
+
+<select 
+  id="cameraSelect"
+  style="width:100%; padding:10px; border-radius:8px; 
+         border:1px solid #334155; background:#0f172a; 
+         color:#f1f5f9; font-size:14px; margin-bottom:12px;"
+>
+  <option>Loading cameras...</option>
+</select>
+
+
+    <button id="joinBtn" onclick="joinInterview()">Join Interview</button>
+
+    <!-- REPLACE the video tag with this: -->
+<div id="videoWrapper" style="display:none; margin-top:20px;">
+  <p style="color:#94a3b8; font-size:13px; margin-bottom:8px;">
+    Your camera preview:
+  </p>
+  <video 
+    id="localVideo" 
+    autoplay 
+    muted 
+    playsinline
+    disablePictureInPicture
+    
+  ></video>
+  <canvas id="captureCanvas" style="display:none;"></canvas>
+</div>
+    <div id="status"></div>
+  </div>
+
+  
+  <script src="/socket.io/socket.io.js"></script>
+<script>
+const SIGNALING_URL = 'http://localhost:3001';
+  const iceConfig = { 
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ] 
+  };
+
+  function showStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = `status-${type}`;
+    el.style.display = 'block';
+  }
+
+  async function getCameras() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const cameras = devices.filter(d => d.kind === 'videoinput');
+
+  const select = document.getElementById('cameraSelect');
+  select.innerHTML = '';
+
+  cameras.forEach((cam, i) => {
+    const option = document.createElement('option');
+    option.value = cam.deviceId;
+    option.text = cam.label || `Camera ${i + 1}`;
+    select.appendChild(option);
+  });
+}
+
+async function getSelectedCamera() {
+  const deviceId = document.getElementById('cameraSelect').value;
+
+  return await navigator.mediaDevices.getUserMedia({
+    video: {
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+      frameRate: { ideal: 15 }
+    },
+    audio: false
+  });
+}
+
+  async function joinInterview() {
+    const roomId = document.getElementById('roomInput').value.trim();
+    if (!roomId) return alert('Please enter a Room ID');
+
+    document.getElementById('joinBtn').disabled = true;
+    showStatus('📷 Starting camera...', 'waiting');
+
+    try {
+      // Get camera with explicit constraints
+      
+
+// 🔎 Find OBS Virtual Camera
+localStream = await getSelectedCamera();
+
+// Show local preview
+      const video = document.getElementById('localVideo');
+
+video.srcObject = localStream;
+// 🔴 START FRAME CAPTURE FOR DEEPFAKE DETECTION
+const canvas = document.getElementById("captureCanvas");
+const ctx = canvas.getContext("2d");
+
+async function sendFrame() {
+  if (!video.videoWidth) return;
+
+  // Force higher resolution
+canvas.width = 640;
+canvas.height = 480;
+ctx.drawImage(video, 0, 0, 640, 480);
+
+  canvas.toBlob(async (blob) => {
+    const formData = new FormData();
+    formData.append("frame", blob, "frame.jpg");
+
+    try {
+      const res = await fetch("http://localhost:5000/analyze-frame", {
+        method: "POST",
+        body: formData
+      });
+
+      const data = await res.json();
+      console.log("Detection:", data);
+
+      // ← THIS IS THE ONLY NEW LINE
+      if (socket && socket.connected && data.label) {
+        socket.emit('detection-result', data);
+      }
+
+    } catch (e) {
+      console.error("Frame send error:", e);
+    }
+  }, "image/jpeg", 1.0);
+}
+// send frame every 2.5 seconds
+
+// 🔴 END FRAME CAPTURE
+video.muted = true;
+
+// Firefox-safe autoplay
+video.onloadedmetadata = async () => {
+  try {
+    await video.play();
+    console.log("Preview video started");
+  } catch(e) {
+    console.log("Play blocked:", e);
+  }
+};
+
+document.getElementById('videoWrapper').style.display = 'block';
+
+// Debug info
+const tracks = localStream.getVideoTracks();
+console.log('Video tracks:', tracks.length);
+console.log('Track state:', tracks[0]?.readyState);
+console.log('Track enabled:', tracks[0]?.enabled);
+
+      showStatus('🔌 Connecting to server...', 'waiting');
+
+      socket = io(SIGNALING_URL, { transports: ['websocket'] });
+
+      socket.on('connect', () => {
+        console.log('Socket connected');
+        socket.emit('join-room', roomId);
+        showStatus('⏳ Waiting for interviewer...', 'waiting');
+        setInterval(sendFrame, 2500);
+      });
+
+      socket.on('connect_error', (err) => {
+        showStatus('❌ Server error: ' + err.message, 'error');
+      });
+
+      socket.on('error', (msg) => {
+        showStatus('❌ ' + msg, 'error');
+        document.getElementById('joinBtn').disabled = false;
+      });
+
+      socket.on('offer', async (offer) => {
+        showStatus('🤝 Connecting to interviewer...', 'waiting');
+        console.log('Offer received');
+
+        peerConnection = new RTCPeerConnection(iceConfig);
+
+        // ── THIS IS THE KEY PART ──
+        // Add each track individually and log it
+        localStream.getTracks().forEach(track => {
+          console.log('Adding track:', track.kind, track.label);
+          peerConnection.addTrack(track, localStream);
+        });
+
+        peerConnection.onicecandidate = ({ candidate }) => {
+          if (candidate) {
+            console.log('Sending ICE candidate');
+            socket.emit('ice-candidate', { roomId, candidate });
+          }
+        };
+
+        peerConnection.onconnectionstatechange = () => {
+          console.log('Connection state:', peerConnection.connectionState);
+          if (peerConnection.connectionState === 'connected') {
+            showStatus('✅ Connected! Interview is live.', 'connected');
+          } else if (peerConnection.connectionState === 'failed') {
+            showStatus('❌ Connection failed', 'error');
+          }
+        };
+
+        peerConnection.oniceconnectionstatechange = () => {
+          console.log('ICE state:', peerConnection.iceConnectionState);
+        };
+
+        await peerConnection.setRemoteDescription(
+          new RTCSessionDescription(offer)
+        );
+        
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        
+        socket.emit('answer', { roomId, answer });
+        console.log('Answer sent');
+      });
+
+      socket.on('ice-candidate', async (candidate) => {
+        try {
+          await peerConnection?.addIceCandidate(
+            new RTCIceCandidate(candidate)
+          );
+        } catch(e) {
+          console.warn('ICE error:', e);
+        }
+      });
+
+      socket.on('peer-disconnected', () => {
+        showStatus('📴 Interviewer disconnected.', 'error');
+      });
+
+    } catch (err) {
+      console.error('Full error:', err);
+      showStatus('❌ Camera error: ' + err.message, 'error');
+      document.getElementById('joinBtn').disabled = false;
+    }
+  }
+  window.onload = () => getCameras();
+</script>
+
+</body>
+</html>
